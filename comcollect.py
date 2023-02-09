@@ -30,13 +30,23 @@ import time
 reddit = praw.Reddit("account")
 
 # Select the community to draw your comments from, this is the community you are making a comparison within
-subreddit = reddit.subreddit('gundam')
+subreddit_name = 'gundam'
 
 # The type of comparison you wish to perform. Type 0 is direct score comparison, Type 1 compares scores within an
 # account and averages the show scores after. Type 2 compares scores across all accounts and averages the paired
 # show scores after. Type 0 is just for basic reference. Type 1 will perform quicker and is a pretty standard form
 # of comparison. I prefer Type 2 but it will not do well with very large sample sizes.
 compare_type = 0
+
+# Select the max number of posts you will look through to gather comments.
+posts_limit = 100
+# Select the max of how far down the comment section you go, in terms of how many times you click 'more comments'
+# None will select all
+post_comment_limit = None
+# Select the max number of a users comments you will look through to find their flair, None will select the last 1000
+# which is the max that the API will allow.
+user_comment_limit = None
+
 
 # A list of the IDs for each show in question. MAL and Anilist often have the same IDs but not always, these IDs are
 # for every Gundam currently out that isn't a recap, etc. Probably. If you replace these with other make sure that the
@@ -52,16 +62,17 @@ anilist_ids = [80, 85, 8839, 86, 87, 82, 84, 2695, 81, 17717, 1917, 1916, 4232, 
 
 # ---------- Parameters End ----------
 
+print('--- Start ----')
 start_time = time.time()
-print('--- time ---')
 
 user_list = []
 flair_list = []
+subreddit = reddit.subreddit(subreddit_name)
 
 # Selects the top x posts in
-for submission in subreddit.top(limit=1):
+for submission in subreddit.top(limit=posts_limit):
     # Selects how far down the comments section you will go, select None to get all of them
-    submission.comments.replace_more(limit=2)
+    submission.comments.replace_more(limit=post_comment_limit)
     # Iterates through each comment and its replies, checks if the user is existing, and records the name in a list
     for comment in submission.comments.list():
         if comment.author:
@@ -72,9 +83,10 @@ print('Number of users found:', len(user_list))
 
 # Iterates through each user in the list and reads their comments
 for user in user_list:
+    print("Gathering comments for user", user)
     try:
         # Select how many comments back to read, None for all of them
-        for comment in reddit.redditor(user).comments.new(limit=10):
+        for comment in reddit.redditor(user).comments.new(limit=user_comment_limit):
             if comment.subreddit == 'Anime':
                 if comment.author_flair_text is not None:
                     if "anilist" in comment.author_flair_text or 'myanimelist' in comment.author_flair_text:
@@ -87,13 +99,13 @@ for user in user_list:
                         if 'anilist' in flair:
                             flair = flair + '/animelist/Completed'
                         if 'myanimelist' in flair:
-                            flair.replace('profile', 'animelist')
-                            flair = flair + '?status=2'
+                            flair = flair.replace('profile', 'animelist') + '?status=2'
                         flair_list.append(flair)
                         break
     except Forbidden:
-        print("403 error on user", user, ": suspended")
+        print("403 error on user:", user, "- likely suspended")
 print('Users with usable flairs:', len(flair_list))
+print(flair_list)
 
 # Creates a tuple of each ID pair for easier comparison later
 new_ids = list(map(lambda x, y: [x, y], mal_ids, anilist_ids))
@@ -105,7 +117,7 @@ out_df = pd.DataFrame(columns=['ID', 'Score'])
 final_df = pd.DataFrame(columns=['ID', 'Score'])
 
 # Iterates through each flair in the list to pull the relevant scores from either website
-for i in flair_list:
+for item in flair_list:
     # Loading each page, both Anilist and MAL (sometimes) utilize dynamic webpages, this opens the webpage and scrolls
     # to the bottom to ensure that all of the scoring data is read
     options = webdriver.ChromeOptions()
@@ -113,21 +125,21 @@ for i in flair_list:
     driver = webdriver.Chrome()
     driver.maximize_window()
     wait = WebDriverWait(driver, 10)
-    driver.get(i)
+    driver.get(item)
     time.sleep(3)
     previous_height = driver.execute_script('return document.body.scrollHeight')
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        if 'anilist' in i:
+        if 'anilist' in item:
             time.sleep(.15)
-        if 'myanimelist' in i:
+        if 'myanimelist' in item:
             time.sleep(2)
         new_height = driver.execute_script('return document.body.scrollHeight')
         if new_height == previous_height:
             break
         previous_height = new_height
     # Protocol for Anilist
-    if 'anilist' in i:
+    if 'anilist' in item:
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         results = soup.select('.entry.row')
         for result in results:
@@ -147,7 +159,7 @@ for i in flair_list:
                     concat_df = pd.DataFrame({'Title': [title], 'ID': [link_ref], 'Score': [score]})
                     df = pd.concat([df, concat_df], ignore_index=True)
     # Protocol for MAL
-    if 'myanimelist' in i:
+    if 'myanimelist' in item:
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         # Type 1 MAL profile, because MAL insists on personalized user profiles with differing tags.
         if soup.select('.list-block'):
@@ -193,7 +205,7 @@ for i in flair_list:
                         continue
                     # Adds all relevant scores to a df
                     if link_ref in new_ids:
-                        concat_df = pd.DataFrame({'Title': [title], 'ID': [link_ref[0]], 'Score': [score]})
+                        concat_df = pd.DataFrame({'Title': [title], 'ID': [link_ref], 'Score': [score]})
                         df = pd.concat([df, concat_df], ignore_index=True)
 
     # Puts the scores for each ID into a difference matrix to measure their comparative scores against each other
@@ -222,11 +234,15 @@ for i in flair_list:
     # Direct compare, averages the score of each show. Here only concat score_df to a df outside the loops for later
     # processing.
     if compare_type == 0:
-        for i in df.index:
-            df.ID[i] = tuple(df.ID[i])
-        out_df = pd.concat([out_df, df], ignore_index=True)
-        df = df.iloc[0:0]
-        score_df = score_df.iloc[0:0]
+        try:
+            for index in out_df.index:
+                out_df.ID[index] = tuple(out_df.ID[index])
+            out_df = pd.concat([out_df, df], ignore_index=True)
+            df = df.iloc[0:0]
+            score_df = score_df.iloc[0:0]
+        except TypeError:
+            print('TypeError: Flair', item, 'likely incompatible')
+            print(df)
 
     # Type 1 compare:
     # Iterates through the earlier dataframe, comparing each ID tuple with the double ones from score_df, averages
@@ -247,9 +263,15 @@ for i in flair_list:
     # Iterates through the earlier dataframe, comparing each ID tuple with the double ones from score_df, averages
     # the values across each show. Here only concat score_df to a df outside the loops for later processing.
     if compare_type == 2:
-        out_df = pd.concat([out_df, score_df], ignore_index=True)
-        df = df.iloc[0:0]
-        score_df = score_df.iloc[0:0]
+        try:
+            for index in out_df.index:
+                out_df.ID[index] = tuple(out_df.ID[index])
+            out_df = pd.concat([out_df, score_df], ignore_index=True)
+            df = df.iloc[0:0]
+            score_df = score_df.iloc[0:0]
+        except TypeError:
+            print('TypeError: Flair', item, 'likely incompatible')
+            print(df)
 
 # Continuation of Type 0 compare, does the averaging by show here.
 if compare_type == 0:
@@ -267,10 +289,19 @@ if compare_type == 2:
     final_df = pd.concat([final_df, concat_df], ignore_index=True)
 
 # Averages the results of each profile and outputs the final result.
-final_df = final_df.groupby(['ID'], as_index=False).mean()
-final_df = final_df.sort_values('Score', ignore_index=True, ascending=False)
-print(final_df)
-# Saves results as csv and pk1 for future reference
-final_df.to_csv('results.csv', index=False)
-final_df.to_pickle('results.pk1', index=False)
+try:
+    final_df = final_df.groupby(['ID'], as_index=False).mean()
+    final_df = final_df.sort_values('Score', ignore_index=True, ascending=False)
+    print(final_df)
+    # Saves results as csv and pk1 for future reference
+    final_df.to_csv('results.csv', index=False)
+    final_df.to_pickle('results.pk1')
+except TypeError:
+    print("No usable flairs")
+except KeyError:
+    print("No usable flairs")
+print('--- time ---')
 print('--- %s seconds ---' % (time.time() - start_time))
+
+# todo
+# Add infographic output
