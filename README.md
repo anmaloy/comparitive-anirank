@@ -12,11 +12,12 @@ Instructions
 ----
 
 comparitive-anirank requires a Python installation and the following packages:
-	-BeautiulSoup
-	-numpy
-	-pandas
-	-praw
-	-selenium
+  * BeautiulSoup 
+  * numpy
+  * pandas
+  * praw
+  * selenium
+  * time
 Instructions for setting up a Python environment on Windows can be found [here](https://docs.python.org/3/using/windows.html)
 
 BeautifulSoup is utilized for parsing the html of both Anilist and MAL, selenium is included to access the dynamic elements of each website.
